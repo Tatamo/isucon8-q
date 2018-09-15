@@ -12,9 +12,9 @@ import util from "util";
 import { IncomingMessage } from "http";
 import log4js from "log4js";
 
-log4js.configure("/home/isucon/torb/webapp/nodejs/log4js_config.json");
-const logger = log4js.getLogger();
-logger.level = "debug";
+// log4js.configure("/home/isucon/torb/webapp/nodejs/log4js_config.json");
+// const logger = log4js.getLogger();
+// logger.level = "debug";
 
 const execFile = util.promisify(child_process.execFile);
 
@@ -263,7 +263,7 @@ function parseTimestampToEpoch(timestamp: string) {
 }
 
 fastify.get("/", { beforeHandler: fillinUser }, async (request, reply) => {
-  logger.debug("THIS IS DEBUG LOG!! (GET /)");
+  // logger.debug("THIS IS DEBUG LOG!! (GET /)");
   const events = (await getEvents()).map((event) => sanitizeEvent(event));
 
   reply.view("index.html.ejs", {
