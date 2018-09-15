@@ -469,7 +469,7 @@ fastify.get("/api/events", async (_request, reply) => {
 });
 
 fastify.get("/api/events/:id", async (request, reply) => {
-  const eventId = request.params.id;
+  const eventId = Number(request.params.id);
   const user = await getLoginUser(request);
   const [event] = await getEvent([eventId], user ? user.id : undefined);
 
@@ -482,7 +482,7 @@ fastify.get("/api/events/:id", async (request, reply) => {
 });
 
 fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }, async (request, reply) => {
-  const eventId = request.params.id;
+  const eventId = Number(request.params.id);
   const rank = request.body.sheet_rank;
 
   const user = request.loginUser!;
@@ -528,7 +528,7 @@ fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }
 });
 
 fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler: loginRequired }, async (request, reply) => {
-  const eventId = request.params.id;
+  const eventId = Number(request.params.id);
   const rank = request.params.rank;
   const num = request.params.num;
 
@@ -764,7 +764,7 @@ fastify.post("/admin/api/events", { beforeHandler: adminLoginRequired }, async (
 });
 
 fastify.get("/admin/api/events/:id", { beforeHandler: adminLoginRequired }, async (request, reply) => {
-  const eventId = request.params.id;
+  const eventId = Number(request.params.id);
   const [event] = await getEvent([eventId]);
   if (!event) {
     return resError(reply, "not_found", 404);
@@ -773,7 +773,7 @@ fastify.get("/admin/api/events/:id", { beforeHandler: adminLoginRequired }, asyn
 });
 
 fastify.post("/admin/api/events/:id/actions/edit", { beforeHandler: adminLoginRequired }, async (request, reply) => {
-  const eventId = request.params.id;
+  const eventId = Number(request.params.id);
   const closed = request.body.closed;
   const isPublic = closed ? false : !!request.body.public;
 
@@ -804,7 +804,7 @@ fastify.post("/admin/api/events/:id/actions/edit", { beforeHandler: adminLoginRe
 });
 
 fastify.get("/admin/api/reports/events/:id/sales", { beforeHandler: adminLoginRequired }, async (request, reply) => {
-  const eventId = request.params.id;
+  const eventId = Number(request.params.id);
   const [event] = await getEvent([eventId]);
 
   let reports: Array<any> = [];
