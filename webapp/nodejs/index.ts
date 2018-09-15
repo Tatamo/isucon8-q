@@ -581,25 +581,24 @@ async function getRecentReservations(user: any) {
   {
     const [rows] = await fastify.mysql.query(
       `
-    SELECT r.*,
-           s.rank AS sheet_rank,
-           s.num AS sheet_num
+    SELECT r.*
     FROM reservations r
-         INNER JOIN sheets s ON s.id = r.sheet_id
     WHERE r.user_id = ?
     ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC
     LIMIT 5
     `,
       [[user.id]],
     );
+    const sheetsData = await sheets();
     for (const row of rows) {
       const event = await getEvent(row.event_id);
+      const sheetData = sheetsData.data.get(row.sheet_id)!;
       const reservation = {
         id: row.id,
         event,
-        sheet_rank: row.sheet_rank,
-        sheet_num: row.sheet_num,
-        price: event.sheets[row.sheet_rank].price,
+        sheet_rank: sheetData.rank,
+        sheet_num: sheetData.num,
+        price: event.sheets[sheetData.rank].price,
         reserved_at: parseTimestampToEpoch(row.reserved_at),
         canceled_at: row.canceled_at ? parseTimestampToEpoch(row.canceled_at) : null,
       };
