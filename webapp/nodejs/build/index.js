@@ -81,9 +81,9 @@ async function getEvents(where = (eventRow) => !!eventRow.public_fg) {
     await conn.beginTransaction();
     try {
         const [rows] = await conn.query("SELECT * FROM events ORDER BY id ASC");
-        const eventIds = rows.filter((row) => where(row)).map((row) => row.id);
-        for (const eventId of eventIds) {
-            const event = (await getEvent(eventId));
+        const filteredRows = rows.filter((row) => where(row));
+        for (const eventDoc of filteredRows) {
+            const event = (await getEvent(eventDoc.id, undefined, eventDoc));
             for (const rank of Object.keys(event.sheets)) {
                 delete event.sheets[rank].detail;
             }
@@ -98,8 +98,8 @@ async function getEvents(where = (eventRow) => !!eventRow.public_fg) {
     await conn.release();
     return events;
 }
-async function getEvent(eventId, loginUserId) {
-    const [[eventRow]] = await fastify.mysql.query("SELECT * FROM events WHERE id = ?", [eventId]);
+async function getEvent(eventId, loginUserId, loadedEvent) {
+    const eventRow = loadedEvent != null ? loadedEvent : (await fastify.mysql.query("SELECT * FROM events WHERE id = ?", [eventId]))[0][0];
     if (!eventRow) {
         return null;
     }
@@ -112,15 +112,19 @@ async function getEvent(eventId, loginUserId) {
         sheetsForRank.total = 0;
         sheetsForRank.remains = 0;
     }
-    const [sheetRows] = await fastify.mysql.query("SELECT * FROM sheets ORDER BY `rank`, num");
-    for (const sheetRow of sheetRows) {
+    const sheetsData = await sheets();
+    for (const sheetRow of sheetsData.byRowRank) {
         const sheet = Object.assign({}, sheetRow);
         if (!event.sheets[sheet.rank].price) {
             event.sheets[sheet.rank].price = event.price + sheet.price;
         }
         event.total++;
         event.sheets[sheet.rank].total++;
-        const [[reservation]] = await fastify.mysql.query("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)", [event.id, sheet.id]);
+        const [[reservation]] = await fastify.mysql.query(`
+      SELECT * FROM reservations
+      WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL
+      GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+      `, [event.id, sheet.id]);
         if (reservation) {
             if (loginUserId && reservation.user_id === loginUserId) {
                 sheet.mine = true;
@@ -143,6 +147,21 @@ async function getEvent(eventId, loginUserId) {
     delete event.closed_fg;
     return event;
 }
+/**
+ * getEvent which uses per-request cache.
+ */
+async function getEventCached(eventId, cache) {
+    const e = cache.get(eventId);
+    if (e != null) {
+        return Object.assign({}, e);
+    }
+    const result = await getEvent(eventId);
+    if (result != null) {
+        cache.set(eventId, result);
+        return Object.assign({}, result);
+    }
+    return null;
+}
 function sanitizeEvent(event) {
     const sanitized = Object.assign({}, event);
     delete sanitized.price;
@@ -151,9 +170,8 @@ function sanitizeEvent(event) {
     return sanitized;
 }
 async function validateRank(rank) {
-    const [[row]] = await fastify.mysql.query("SELECT COUNT(*) FROM sheets WHERE `rank` = ?", [rank]);
-    const [count] = Object.values(row);
-    return count > 0;
+    const rowCount = (await sheets()).countByRank(rank);
+    return rowCount > 0;
 }
 function parseTimestampToEpoch(timestamp) {
     return Math.floor(new Date(timestamp + "Z").getTime() / 1000);
@@ -208,38 +226,34 @@ fastify.post("/api/users", async (request, reply) => {
 });
 fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, reply) => {
     const user = request.loginUser;
-    if (request.params.id !== user.id) {
+    if (request.params.id !== String(user.id)) {
         return resError(reply, "forbidden", 403);
     }
-    const recentReservations = [];
-    {
-        const [rows] = await fastify.mysql.query("SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id WHERE r.user_id = ? ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC LIMIT 5", [[user.id]]);
-        for (const row of rows) {
-            const event = await getEvent(row.event_id);
-            const reservation = {
-                id: row.id,
-                event,
-                sheet_rank: row.sheet_rank,
-                sheet_num: row.sheet_num,
-                price: event.sheets[row.sheet_rank].price,
-                reserved_at: parseTimestampToEpoch(row.reserved_at),
-                canceled_at: row.canceled_at ? parseTimestampToEpoch(row.canceled_at) : null,
-            };
-            delete event.sheets;
-            delete event.total;
-            delete event.remains;
-            recentReservations.push(reservation);
-        }
-    }
+    // per-request cache of Events.
+    const eventCache = new Map();
+    const recentReservations = await getRecentReservations(user, eventCache);
     user.recent_reservations = recentReservations;
-    const [[totalPriceRow]] = await fastify.mysql.query("SELECT IFNULL(SUM(e.price + s.price), 0) FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.user_id = ? AND r.canceled_at IS NULL", user.id);
+    const [[totalPriceRow]] = await fastify.mysql.query(`
+    SELECT IFNULL(SUM(e.price + s.price), 0)
+    FROM reservations r
+         INNER JOIN sheets s ON s.id = r.sheet_id
+         INNER JOIN events e ON e.id = r.event_id
+    WHERE r.user_id = ? AND r.canceled_at IS NULL
+    `, user.id);
     const [totalPriceStr] = Object.values(totalPriceRow);
     user.total_price = Number.parseInt(totalPriceStr, 10);
     const recentEvents = [];
     {
-        const [rows] = await fastify.mysql.query("SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5", [user.id]);
+        const [rows] = await fastify.mysql.query(`
+      SELECT event_id
+      FROM reservations
+      WHERE user_id = ?
+      GROUP BY event_id
+      ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC
+      LIMIT 5
+      `, [user.id]);
         for (const row of rows) {
-            const event = await getEvent(row.event_id);
+            const event = await getEventCached(row.event_id, eventCache);
             for (const sheetRank of Object.keys(event.sheets)) {
                 delete event.sheets[sheetRank].detail;
             }
@@ -289,7 +303,7 @@ fastify.get("/api/events/:id", async (request, reply) => {
 fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }, async (request, reply) => {
     const eventId = request.params.id;
     const rank = request.body.sheet_rank;
-    const user = (await getLoginUser(request));
+    const user = request.loginUser;
     const event = await getEvent(eventId, user.id);
     if (!(event && event.public)) {
         return resError(reply, "invalid_event", 404);
@@ -331,7 +345,7 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
     const eventId = request.params.id;
     const rank = request.params.rank;
     const num = request.params.num;
-    const user = (await getLoginUser(request));
+    const user = request.loginUser;
     const event = await getEvent(eventId, user.id);
     if (!(event && event.public)) {
         return resError(reply, "invalid_event", 404);
@@ -375,6 +389,70 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
     }
     reply.code(204);
 });
+class SheetsData {
+    constructor(sheetRows) {
+        this.rankCountMap = new Map();
+        const data = new Map();
+        const byRowRank = [];
+        const rankCountMap = this.rankCountMap;
+        for (const sheetRow of sheetRows) {
+            data.set(sheetRow.id, sheetRow);
+            byRowRank.push(sheetRow);
+            rankCountMap.set(sheetRow.rank, (rankCountMap.get(sheetRow.rank) || 0) + 1);
+        }
+        this.data = data;
+        this.byRowRank = byRowRank;
+    }
+    countByRank(rank) {
+        return this.rankCountMap.get(rank) || 0;
+    }
+}
+/**
+ * Cache of `sheets` data, which is not changed dynamically.
+ */
+const sheets = (() => {
+    let cache = null;
+    return async () => {
+        if (cache != null) {
+            return cache;
+        }
+        const [sheetRows] = await fastify.mysql.query("SELECT * FROM sheets ORDER BY `rank`, num");
+        cache = new SheetsData(sheetRows);
+        return cache;
+    };
+})();
+async function getRecentReservations(user, eventCache) {
+    const recentReservations = [];
+    {
+        const [rows] = await fastify.mysql.query(`
+    SELECT r.*,
+           s.rank AS sheet_rank,
+           s.num AS sheet_num
+    FROM reservations r
+         INNER JOIN sheets s ON s.id = r.sheet_id
+    WHERE r.user_id = ?
+    ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC
+    LIMIT 5
+    `, [[user.id]]);
+        for (const row of rows) {
+            const event = await getEventCached(row.event_id, eventCache);
+            const reservation = {
+                id: row.id,
+                event,
+                sheet_rank: row.sheet_rank,
+                sheet_num: row.sheet_num,
+                price: event.sheets[row.sheet_rank].price,
+                reserved_at: parseTimestampToEpoch(row.reserved_at),
+                canceled_at: row.canceled_at ? parseTimestampToEpoch(row.canceled_at) : null,
+            };
+            delete event.sheets;
+            delete event.total;
+            delete event.remains;
+            recentReservations.push(reservation);
+        }
+    }
+    return recentReservations;
+}
 async function getLoginAdministrator(request) {
     const administratorId = JSON.parse(request.cookies.administrator_id || "null");
     if (!administratorId) {
@@ -497,7 +575,18 @@ fastify.get("/admin/api/reports/events/:id/sales", { beforeHandler: adminLoginRe
     const eventId = request.params.id;
     const event = await getEvent(eventId);
     let reports = [];
-    const [reservationRows] = await fastify.mysql.query("SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num, s.price AS sheet_price, e.price AS event_price FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.event_id = ? ORDER BY reserved_at ASC FOR UPDATE", [eventId]);
+    const [reservationRows] = await fastify.mysql.query(`
+    SELECT r.*,
+           s.rank AS sheet_rank,
+           s.num AS sheet_num,
+           s.price AS sheet_price,
+           e.price AS event_price
+    FROM reservations r
+         INNER JOIN sheets s ON s.id = r.sheet_id
+         INNER JOIN events e ON e.id = r.event_id
+         WHERE r.event_id = ?
+    ORDER BY reserved_at ASC FOR UPDATE
+    `, [eventId]);
     for (const reservationRow of reservationRows) {
         const report = {
             reservation_id: reservationRow.id,
