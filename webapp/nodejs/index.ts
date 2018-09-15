@@ -137,9 +137,9 @@ async function getEvents(where: (event: Event) => boolean = (eventRow) => !!even
   try {
     const [rows] = await conn.query("SELECT * FROM events ORDER BY id ASC");
 
-    const events = rows.filter((row) => where(row));
+    const filteredRows = rows.filter((row) => where(row));
 
-    for (const eventDoc of events) {
+    for (const eventDoc of filteredRows) {
       const event = (await getEvent(eventDoc.id, undefined, eventDoc))!;
 
       for (const rank of Object.keys(event.sheets)) {
