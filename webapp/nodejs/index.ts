@@ -577,23 +577,34 @@ function fillinAdministrator(request, _reply, done) {
   });
 }
 
+function sleep (seconds) {
+  return new Promise((resolve) => {
+    setTmeout(() => {
+      resolve()
+    }, seconds * 1000)
+  })
+}
+
+
 fastify.get("/admin/", { beforeHandler: fillinAdministrator }, async (request, reply) => {
   let events: ReadonlyArray<any> = [];
   if (request.administrator) {
     events = await getEvents((_event) => true);
   }
 
-  reply.view("admin.html.ejs", {
+  sleep(3.0)
+  .then(reply.view("admin.html.ejs", {
     events,
     administrator: request.administrator,
     uriFor: buildUriFor(request),
-  });
+  }));
 });
 
 fastify.post("/admin/api/actions/login", async (request, reply) => {
   const loginName = request.body.login_name;
   const password = request.body.password;
 
+  
   const [[administratorRow]] = await fastify.mysql.query("SELECT * FROM administrators WHERE login_name = ?", [loginName]);
   const [[passHashRow]] = await fastify.mysql.query("SELECT SHA2(?, 256)", [password]);
   const [passHash] = Object.values(passHashRow);
@@ -605,7 +616,7 @@ fastify.post("/admin/api/actions/login", async (request, reply) => {
   });
   request.cookies.administrator_id = `${administratorRow.id}`; // for the follong getLoginAdministratorUser()
   const administrator = await getLoginAdministrator(request);
-
+  
   reply.send(administrator);
 });
 
