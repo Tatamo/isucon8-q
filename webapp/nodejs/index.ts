@@ -218,6 +218,11 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
         };
         break;
       }
+      // no more reservation.
+      yield {
+        sheet: sheetRow,
+        reservation: null,
+      };
     }
   }
 
