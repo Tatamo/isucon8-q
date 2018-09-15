@@ -750,7 +750,7 @@ fastify.post("/admin/api/events", { beforeHandler: adminLoginRequired }, async (
 
 fastify.get("/admin/api/events/:id", { beforeHandler: adminLoginRequired }, async (request, reply) => {
   const eventId = request.params.id;
-  const event = await getEvent(eventId);
+  const [event] = await getEvent([eventId]);
   if (!event) {
     return resError(reply, "not_found", 404);
   }
@@ -784,7 +784,7 @@ fastify.post("/admin/api/events/:id/actions/edit", { beforeHandler: adminLoginRe
   }
   conn.release();
 
-  const updatedEvent = await getEvent(eventId);
+  const [updatedEvent] = await getEvent([eventId]);
   reply.send(updatedEvent);
 });
 
