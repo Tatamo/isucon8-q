@@ -297,7 +297,7 @@ fastify.post("/api/users", async (request, reply) => {
 
 fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, reply) => {
   const user = request.loginUser as any;
-  if (request.params.id !== user.id) {
+  if (request.params.id !== String(user.id)) {
     return resError(reply, "forbidden", 403);
   }
 
