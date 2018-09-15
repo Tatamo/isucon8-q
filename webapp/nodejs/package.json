@@ -16,6 +16,7 @@
     "fastify-mysql": "*",
     "fastify-plugin": "*",
     "fastify-static": "*",
+    "log4js": "^3.0.5",
     "point-of-view": "*",
     "trace-error": "*",
     "ts-node": "*",
