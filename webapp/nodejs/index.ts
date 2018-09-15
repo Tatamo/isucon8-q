@@ -262,22 +262,6 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
   return event;
 }
 
-/**
- * getEvent which uses per-request cache.
- */
-async function getEventCached(eventId: number, cache: Map<number, Event>): Promise<Event | null> {
-  const e = cache.get(eventId);
-  if (e != null) {
-    return { ...e };
-  }
-  const result = await getEvent(eventId);
-  if (result != null) {
-    cache.set(eventId, result);
-    return { ...result };
-  }
-  return null;
-}
-
 function sanitizeEvent(event: Event) {
   const sanitized = { ...event };
   delete sanitized.price;
@@ -361,9 +345,7 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
     return resError(reply, "forbidden", 403);
   }
 
-  // per-request cache of Events.
-  const eventCache = new Map();
-  const recentReservations: Array<any> = await getRecentReservations(user, eventCache);
+  const recentReservations: Array<any> = await getRecentReservations(user);
 
   user.recent_reservations = recentReservations;
 
@@ -394,7 +376,7 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
       [user.id],
     );
     for (const row of rows) {
-      const event = await getEventCached(row.event_id, eventCache);
+      const event = await getEvent(row.event_id);
       for (const sheetRank of Object.keys(event.sheets)) {
         delete event.sheets[sheetRank].detail;
       }
@@ -594,7 +576,7 @@ const sheets: () => Promise<SheetsData> = (() => {
   };
 })();
 
-async function getRecentReservations(user: any, eventCache: Map<any, any>) {
+async function getRecentReservations(user: any) {
   const recentReservations: Array<any> = [];
   {
     const [rows] = await fastify.mysql.query(
@@ -611,7 +593,7 @@ async function getRecentReservations(user: any, eventCache: Map<any, any>) {
       [[user.id]],
     );
     for (const row of rows) {
-      const event = await getEventCached(row.event_id, eventCache);
+      const event = await getEvent(row.event_id);
       const reservation = {
         id: row.id,
         event,
