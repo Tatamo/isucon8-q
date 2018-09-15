@@ -1,0 +1,30 @@
+{
+  "appenders": [
+	{
+	  "type":     "File",
+	  "category": "system",
+	  "maxLogSize": 1048576,
+	  "backups": 3,
+	  "compress":true,
+	  "filename": "/home/isucon/logs/nodejs/system.log"
+	},
+	{
+	  "type":     "dateFile",
+	  "category": "access",
+	  "filename": "/home/isucon/logs/nodejs/logs/access.log",
+	  "pattern":  "-yyyy-MM-dd"
+	},
+	{
+	  "type":     "dateFile",
+	  "category": "error",
+	  "filename": "/home/isucon/logs/nodejs/logs/error.log",
+	  "pattern":  "-yyyy-MM-dd"
+	},
+	{
+	  "type":     "console",
+	  "category": "test"
+	}
+  ],
+  "levels": {"system": "INFO"},
+  "replaceConsole": true
+}
