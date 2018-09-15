@@ -12,5 +12,9 @@ Type      = simple
 User      = isucon
 Group     = isucon
 
+StandardOutput = journal
+StandardError = journal
+
+
 [Install]
 WantedBy = multi-user.target
