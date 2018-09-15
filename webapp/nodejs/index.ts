@@ -642,12 +642,14 @@ async function getRecentReservations(user: any) {
     const events = await getEvent(rows.map((row) => row.event_id));
     for (const [row, event] of zip(rows, events)) {
       const sheetData = sheetsData.data.get(row.sheet_id)!;
+      let price = 0;
+      if(!(sheetData.rank in event.seets) )  price = event.sheets[sheetData.rank].price;
       const reservation = {
         id: row.id,
         event,
         sheet_rank: sheetData.rank,
         sheet_num: sheetData.num,
-        price: event.sheets[sheetData.rank].price,
+        price: price,
         reserved_at: parseTimestampToEpoch(row.reserved_at),
         canceled_at: row.canceled_at ? parseTimestampToEpoch(row.canceled_at) : null,
       };
