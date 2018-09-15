@@ -11,6 +11,7 @@ import child_process from "child_process";
 import util from "util";
 import { IncomingMessage } from "http";
 import log4js from "log4js";
+import { Z_PARTIAL_FLUSH } from "zlib";
 
 // log4js.configure("/home/isucon/torb/webapp/nodejs/log4js_config.json");
 // const logger = log4js.getLogger();
@@ -145,13 +146,14 @@ async function getEvents(where: (event: Event) => boolean = (eventRow) => !!even
     const filteredRows = rows.filter((row) => where(row));
 
     for (const eventDoc of filteredRows) {
-      const event = (await getEvent(eventDoc.id, undefined, eventDoc))!;
+      const eventArr = await getEvent(eventDoc.id, undefined, eventDoc);
 
-      for (const rank of Object.keys(event.sheets)) {
-        delete event.sheets[rank].detail;
+      for (const event of eventArr) {
+        for (const rank of Object.keys(event.sheets)) {
+          delete event.sheets[rank].detail;
+        }
+        events.push(event);
       }
-
-      events.push(event);
     }
 
     await conn.commit();
@@ -164,35 +166,103 @@ async function getEvents(where: (event: Event) => boolean = (eventRow) => !!even
   return events;
 }
 
-async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Event): Promise<Event | null> {
-  const eventRow = loadedEvent != null ? loadedEvent : (await fastify.mysql.query("SELECT * FROM events WHERE id = ?", [eventId]))[0][0];
-  if (!eventRow) {
-    return null;
+async function getEvent(eventIds: number[], loginUserId?: number, loadedEvents?: Event[]): Promise<Event[]> {
+  const placeholderIdList = "(" + eventIds.map((_) => "?").join(",") + ")";
+  // if loadedEvent is not provided, load it.
+  let eventRows;
+  if (loadedEvents == null) {
+    const [es] = await fastify.mysql.query(`SELECT * FROM events WHERE id IN ${placeholderIdList}`, eventIds);
+    eventRows = es;
+  } else {
+    eventRows = loadedEvents;
   }
-
-  const event = {
-    ...eventRow,
-    sheets: {},
-  };
-
-  // zero fill
-  event.total = 0;
-  event.remains = 0;
-  for (const rank of ["S", "A", "B", "C"]) {
-    const sheetsForRank = event.sheets[rank] ? event.sheets[rank] : (event.sheets[rank] = { detail: [] });
-    sheetsForRank.total = 0;
-    sheetsForRank.remains = 0;
-  }
-  const sheetsData = await sheets();
 
   const [reservations] = await fastify.mysql.query(
     `
     SELECT * FROM reservations
-    WHERE event_id = ? AND canceled_at IS NULL
-    GROUP BY sheet_id ASC HAVING reserved_at = MIN(reserved_at)
+    WHERE event_id IN ${placeholderIdList} AND canceled_at IS NULL
+    GROUP BY event_id ASC, sheet_id ASC HAVING reserved_at = MIN(reserved_at)
     `,
-    [eventId],
+    eventIds,
   );
+  const resGroup = groupByEventId(reservations);
+
+  const resultEvents: Event[] = [];
+  for (const eventRow of eventRows) {
+    const event = {
+      ...eventRow,
+      sheets: {},
+    };
+    const ress = resGroup.get(event.id) || [];
+
+    // zero fill
+    event.total = 0;
+    event.remains = 0;
+    for (const rank of ["S", "A", "B", "C"]) {
+      const sheetsForRank = event.sheets[rank] ? event.sheets[rank] : (event.sheets[rank] = { detail: [] });
+      sheetsForRank.total = 0;
+      sheetsForRank.remains = 0;
+    }
+    const sheetsData = await sheets();
+
+    for (const { sheet: sheetRow, reservation } of zipBySheetId(sheetsData.byId, ress)) {
+      const sheet: any = { ...sheetRow };
+      if (!event.sheets[sheet.rank].price) {
+        event.sheets[sheet.rank].price = event.price + sheet.price;
+      }
+
+      event.total++;
+      event.sheets[sheet.rank].total++;
+
+      if (reservation) {
+        if (loginUserId && reservation.user_id === loginUserId) {
+          sheet.mine = true;
+        }
+
+        sheet.reserved = true;
+        sheet.reserved_at = parseTimestampToEpoch(reservation.reserved_at);
+      } else {
+        event.remains++;
+        event.sheets[sheet.rank].remains++;
+      }
+
+      event.sheets[sheet.rank].detail.push(sheet);
+
+      delete sheet.id;
+      delete sheet.price;
+      delete sheet.rank;
+    }
+
+    event.public = !!event.public_fg;
+    delete event.public_fg;
+    event.closed = !!event.closed_fg;
+    delete event.closed_fg;
+
+    resultEvents.push(event);
+  }
+  return resultEvents;
+
+  // reservationsをevent idごとに分ける
+  function groupByEventId(reservations: any[]): Map<number, any[]> {
+    const result = new Map();
+    let currentEventId = null;
+    let currentArr: any[] = [];
+    for (const r of reservations) {
+      if (currentEventId !== r.event_id) {
+        // new!
+        if (currentEventId != null) {
+          result.set(currentEventId, currentArr);
+        }
+        currentEventId = r.event_id;
+        currentArr = [];
+      }
+      currentArr.push(r);
+    }
+    if (currentEventId != null) {
+      result.set(currentEventId, currentArr);
+    }
+    return result;
+  }
 
   // sheet_idをマッチさせながらイテレート
   // 両方ともsheetのascでソートされていることを仮定
@@ -225,41 +295,6 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
       };
     }
   }
-
-  for (const { sheet: sheetRow, reservation } of zipBySheetId(sheetsData.byId, reservations)) {
-    const sheet: any = { ...sheetRow };
-    if (!event.sheets[sheet.rank].price) {
-      event.sheets[sheet.rank].price = event.price + sheet.price;
-    }
-
-    event.total++;
-    event.sheets[sheet.rank].total++;
-
-    if (reservation) {
-      if (loginUserId && reservation.user_id === loginUserId) {
-        sheet.mine = true;
-      }
-
-      sheet.reserved = true;
-      sheet.reserved_at = parseTimestampToEpoch(reservation.reserved_at);
-    } else {
-      event.remains++;
-      event.sheets[sheet.rank].remains++;
-    }
-
-    event.sheets[sheet.rank].detail.push(sheet);
-
-    delete sheet.id;
-    delete sheet.price;
-    delete sheet.rank;
-  }
-
-  event.public = !!event.public_fg;
-  delete event.public_fg;
-  event.closed = !!event.closed_fg;
-  delete event.closed_fg;
-
-  return event;
 }
 
 function sanitizeEvent(event: Event) {
@@ -375,8 +410,8 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
       `,
       [user.id],
     );
-    for (const row of rows) {
-      const event = await getEvent(row.event_id);
+    const events = await getEvent(rows.map((row) => row.event_id));
+    for (const event of events) {
       for (const sheetRank of Object.keys(event.sheets)) {
         delete event.sheets[sheetRank].detail;
       }
@@ -422,7 +457,7 @@ fastify.get("/api/events", async (_request, reply) => {
 fastify.get("/api/events/:id", async (request, reply) => {
   const eventId = request.params.id;
   const user = await getLoginUser(request);
-  const event = await getEvent(eventId, user ? user.id : undefined);
+  const [event] = await getEvent([eventId], user ? user.id : undefined);
 
   if (!event || !event.public) {
     return resError(reply, "not_found", 404);
@@ -437,7 +472,7 @@ fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }
   const rank = request.body.sheet_rank;
 
   const user = request.loginUser!;
-  const event = await getEvent(eventId, user.id);
+  const [event] = await getEvent([eventId], user.id);
   if (!(event && event.public)) {
     return resError(reply, "invalid_event", 404);
   }
@@ -484,7 +519,7 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
   const num = request.params.num;
 
   const user = request.loginUser!;
-  const event = await getEvent(eventId, user.id);
+  const [event] = await getEvent([eventId], user.id);
   if (!(event && event.public)) {
     return resError(reply, "invalid_event", 404);
   }
@@ -590,8 +625,8 @@ async function getRecentReservations(user: any) {
       [[user.id]],
     );
     const sheetsData = await sheets();
-    for (const row of rows) {
-      const event = await getEvent(row.event_id);
+    const events = await getEvent(rows.map((row) => row.event_id));
+    for (const [row, event] of zip(rows, events)) {
       const sheetData = sheetsData.data.get(row.sheet_id)!;
       const reservation = {
         id: row.id,
@@ -609,6 +644,13 @@ async function getRecentReservations(user: any) {
     }
   }
   return recentReservations;
+}
+
+function* zip<T, U>(arr1: T[], arr2: U[]): IterableIterator<[T, U]> {
+  const m = Math.min(arr1.length, arr2.length);
+  for (let i = 0; i < m; i++) {
+    yield [arr1[i], arr2[i]];
+  }
 }
 
 async function getLoginAdministrator<T>(request: FastifyRequest<T>): Promise<{ id; nickname } | null> {
@@ -703,7 +745,7 @@ fastify.post("/admin/api/events", { beforeHandler: adminLoginRequired }, async (
   }
   conn.release();
 
-  const event = await getEvent(eventId!);
+  const [event] = await getEvent([eventId!]);
   reply.send(event);
 });
 
@@ -721,7 +763,7 @@ fastify.post("/admin/api/events/:id/actions/edit", { beforeHandler: adminLoginRe
   const closed = request.body.closed;
   const isPublic = closed ? false : !!request.body.public;
 
-  const event = await getEvent(eventId);
+  const [event] = await getEvent([eventId]);
   if (!event) {
     return resError(reply, "not_found", 404);
   }
@@ -749,7 +791,7 @@ fastify.post("/admin/api/events/:id/actions/edit", { beforeHandler: adminLoginRe
 
 fastify.get("/admin/api/reports/events/:id/sales", { beforeHandler: adminLoginRequired }, async (request, reply) => {
   const eventId = request.params.id;
-  const event = await getEvent(eventId);
+  const [event] = await getEvent([eventId]);
 
   let reports: Array<any> = [];
 
