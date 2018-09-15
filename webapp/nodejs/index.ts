@@ -191,6 +191,7 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
     WHERE event_id = ? AND canceled_at IS NULL
     GROUP BY sheet_id ASC HAVING reserved_at = MIN(reserved_at)
     `,
+    [eventId],
   );
 
   // sheet_idをマッチさせながらイテレート
@@ -215,6 +216,7 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
           sheet: sheetRow,
           reservation: matchedReservation,
         };
+        break;
       }
     }
   }
