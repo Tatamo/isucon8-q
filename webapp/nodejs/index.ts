@@ -812,28 +812,26 @@ fastify.get("/admin/api/reports/events/:id/sales", { beforeHandler: adminLoginRe
   const [reservationRows] = await fastify.mysql.query(
     `
     SELECT r.*,
-           s.rank AS sheet_rank,
-           s.num AS sheet_num,
-           s.price AS sheet_price,
            e.price AS event_price
     FROM reservations r
-         INNER JOIN sheets s ON s.id = r.sheet_id
          INNER JOIN events e ON e.id = r.event_id
          WHERE r.event_id = ?
     ORDER BY reserved_at ASC FOR UPDATE
     `,
     [eventId],
   );
+  const sheetsData = await sheets();
   for (const reservationRow of reservationRows) {
+    const sheetData = sheetsData.data.get(reservationRow.sheet_id)!;
     const report = {
       reservation_id: reservationRow.id,
       event_id: event.id,
-      rank: reservationRow.sheet_rank,
-      num: reservationRow.sheet_num,
+      rank: sheetData.rank,
+      num: sheetData.num,
       user_id: reservationRow.user_id,
       sold_at: new Date(reservationRow.reserved_at).toISOString(),
       canceled_at: reservationRow.canceled_at ? new Date(reservationRow.canceled_at).toISOString() : "",
-      price: reservationRow.event_price + reservationRow.sheet_price,
+      price: reservationRow.event_price + sheetData.price,
     };
 
     reports.push(report);
