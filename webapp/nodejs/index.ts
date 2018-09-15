@@ -185,7 +185,41 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
   }
   const sheetsData = await sheets();
 
-  for (const sheetRow of sheetsData.byRowRank) {
+  const [reservations] = await fastify.mysql.query(
+    `
+    SELECT * FROM reservations
+    WHERE event_id = ? AND canceled_at IS NULL
+    GROUP BY sheet_id ASC HAVING reserved_at = MIN(reserved_at)
+    `,
+  );
+
+  // sheet_idをマッチさせながらイテレート
+  // 両方ともsheetのascでソートされていることを仮定
+  function* zipBySheetId(
+    sheetRows: Sheet[],
+    reservations: any[],
+  ): IterableIterator<{
+    sheet: Sheet;
+    reservation: any;
+  }> {
+    let rIdx = 0;
+    for (const sheetRow of sheetRows) {
+      for (; rIdx < reservations.length; rIdx++) {
+        const r = reservations[rIdx];
+        if (r.sheet_id < sheetRow.id) {
+          continue;
+        }
+        const matchedReservation = r.sheet_id === sheetRow.id ? r : null;
+
+        yield {
+          sheet: sheetRow,
+          reservation: matchedReservation,
+        };
+      }
+    }
+  }
+
+  for (const { sheet: sheetRow, reservation } of zipBySheetId(sheetsData.byRowRank, reservations)) {
     const sheet: any = { ...sheetRow };
     if (!event.sheets[sheet.rank].price) {
       event.sheets[sheet.rank].price = event.price + sheet.price;
@@ -194,14 +228,6 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
     event.total++;
     event.sheets[sheet.rank].total++;
 
-    const [[reservation]] = await fastify.mysql.query(
-      `
-      SELECT * FROM reservations
-      WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL
-      GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
-      `,
-      [event.id, sheet.id],
-    );
     if (reservation) {
       if (loginUserId && reservation.user_id === loginUserId) {
         sheet.mine = true;
