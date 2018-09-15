@@ -178,11 +178,10 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
     sheetsForRank.total = 0;
     sheetsForRank.remains = 0;
   }
+  const sheetsData = await sheets();
 
-  const [sheetRows] = await fastify.mysql.query("SELECT * FROM sheets ORDER BY `rank`, num");
-
-  for (const sheetRow of sheetRows) {
-    const sheet = { ...sheetRow };
+  for (const sheetRow of sheetsData.byRowRank) {
+    const sheet: any = { ...sheetRow };
     if (!event.sheets[sheet.rank].price) {
       event.sheets[sheet.rank].price = event.price + sheet.price;
     }
@@ -250,9 +249,8 @@ function sanitizeEvent(event: Event) {
 }
 
 async function validateRank(rank: string): Promise<boolean> {
-  const [[row]] = await fastify.mysql.query("SELECT COUNT(*) FROM sheets WHERE `rank` = ?", [rank]);
-  const [count] = Object.values(row);
-  return count > 0;
+  const rowCount = (await sheets()).countByRank(rank);
+  return rowCount > 0;
 }
 
 function parseTimestampToEpoch(timestamp: string) {
@@ -326,42 +324,7 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
 
   // per-request cache of Events.
   const eventCache = new Map();
-  const recentReservations: Array<any> = [];
-  {
-    const [rows] = await fastify.mysql.query(
-      `
-    SELECT r.*,
-           s.rank AS sheet_rank,
-           s.num AS sheet_num
-    FROM reservations r
-         INNER JOIN sheets s ON s.id = r.sheet_id
-    WHERE r.user_id = ?
-    ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC
-    LIMIT 5
-    `,
-      [[user.id]],
-    );
-
-    for (const row of rows) {
-      const event = await getEventCached(row.event_id, eventCache);
-
-      const reservation = {
-        id: row.id,
-        event,
-        sheet_rank: row.sheet_rank,
-        sheet_num: row.sheet_num,
-        price: event.sheets[row.sheet_rank].price,
-        reserved_at: parseTimestampToEpoch(row.reserved_at),
-        canceled_at: row.canceled_at ? parseTimestampToEpoch(row.canceled_at) : null,
-      };
-
-      delete event.sheets;
-      delete event.total;
-      delete event.remains;
-
-      recentReservations.push(reservation);
-    }
-  }
+  const recentReservations: Array<any> = await getRecentReservations(user, eventCache);
 
   user.recent_reservations = recentReservations;
 
@@ -548,6 +511,83 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
 
   reply.code(204);
 });
+
+interface Sheet {
+  id: number;
+  rank: string;
+  num: number;
+  price: number;
+}
+class SheetsData {
+  public data: Map<number, Sheet>;
+  public byRowRank: Sheet[];
+  private rankCountMap: Map<string, number> = new Map();
+  constructor(sheetRows: any[]) {
+    const data = new Map();
+    const byRowRank: Sheet[] = [];
+    const rankCountMap = this.rankCountMap;
+    for (const sheetRow of sheetRows) {
+      data.set(sheetRow.id, sheetRow);
+      byRowRank.push(sheetRow);
+      rankCountMap.set(sheetRow.rank, (rankCountMap.get(sheetRow.rank) || 0) + 1);
+    }
+    this.data = data;
+    this.byRowRank = byRowRank;
+  }
+  public countByRank(rank: string): number {
+    return this.rankCountMap.get(rank) || 0;
+  }
+}
+/**
+ * Cache of `sheets` data, which is not changed dynamically.
+ */
+const sheets: () => Promise<SheetsData> = (() => {
+  let cache: SheetsData | null = null;
+  return async () => {
+    if (cache != null) {
+      return cache;
+    }
+    const [sheetRows] = await fastify.mysql.query("SELECT * FROM sheets ORDER BY `rank`, num");
+    cache = new SheetsData(sheetRows);
+    return cache;
+  };
+})();
+
+async function getRecentReservations(user: any, eventCache: Map<any, any>) {
+  const recentReservations: Array<any> = [];
+  {
+    const [rows] = await fastify.mysql.query(
+      `
+    SELECT r.*,
+           s.rank AS sheet_rank,
+           s.num AS sheet_num
+    FROM reservations r
+         INNER JOIN sheets s ON s.id = r.sheet_id
+    WHERE r.user_id = ?
+    ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC
+    LIMIT 5
+    `,
+      [[user.id]],
+    );
+    for (const row of rows) {
+      const event = await getEventCached(row.event_id, eventCache);
+      const reservation = {
+        id: row.id,
+        event,
+        sheet_rank: row.sheet_rank,
+        sheet_num: row.sheet_num,
+        price: event.sheets[row.sheet_rank].price,
+        reserved_at: parseTimestampToEpoch(row.reserved_at),
+        canceled_at: row.canceled_at ? parseTimestampToEpoch(row.canceled_at) : null,
+      };
+      delete event.sheets;
+      delete event.total;
+      delete event.remains;
+      recentReservations.push(reservation);
+    }
+  }
+  return recentReservations;
+}
 
 async function getLoginAdministrator<T>(request: FastifyRequest<T>): Promise<{ id; nickname } | null> {
   const administratorId = JSON.parse(request.cookies.administrator_id || "null");
