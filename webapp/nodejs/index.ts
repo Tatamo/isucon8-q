@@ -471,7 +471,8 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
     return resError(reply, "invalid_rank", 404);
   }
 
-  const [[sheetRow]] = await fastify.mysql.query("SELECT * FROM sheets WHERE `rank` = ? AND num = ?", [rank, num]);
+  const sheetsData = await sheets();
+  const sheetRow = sheetsData.getByRankAndNum(rank, num);
   if (!sheetRow) {
     return resError(reply, "invalid_sheet", 404);
   }
@@ -522,20 +523,25 @@ class SheetsData {
   public data: Map<number, Sheet>;
   public byRowRank: Sheet[];
   private rankCountMap: Map<string, number> = new Map();
+  private byRankAndNumMap: Map<string, Sheet> = new Map();
   constructor(sheetRows: any[]) {
     const data = new Map();
     const byRowRank: Sheet[] = [];
-    const rankCountMap = this.rankCountMap;
+    const { rankCountMap, byRankAndNumMap } = this;
     for (const sheetRow of sheetRows) {
       data.set(sheetRow.id, sheetRow);
       byRowRank.push(sheetRow);
       rankCountMap.set(sheetRow.rank, (rankCountMap.get(sheetRow.rank) || 0) + 1);
+      byRankAndNumMap.set(`${sheetRow.rank}#${sheetRow.num}`, sheetRow);
     }
     this.data = data;
     this.byRowRank = byRowRank;
   }
   public countByRank(rank: string): number {
     return this.rankCountMap.get(rank) || 0;
+  }
+  public getByRankAndNum(rank: string, num: number): Sheet | undefined {
+    return this.byRankAndNumMap.get(`${rank}#${num}`);
   }
 }
 /**
@@ -558,25 +564,24 @@ async function getRecentReservations(user: any, eventCache: Map<any, any>) {
   {
     const [rows] = await fastify.mysql.query(
       `
-    SELECT r.*,
-           s.rank AS sheet_rank,
-           s.num AS sheet_num
+    SELECT r.*
     FROM reservations r
-         INNER JOIN sheets s ON s.id = r.sheet_id
     WHERE r.user_id = ?
     ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC
     LIMIT 5
     `,
       [[user.id]],
     );
+    const sheetsData = await sheets();
     for (const row of rows) {
       const event = await getEventCached(row.event_id, eventCache);
+      const sheetData = sheetsData.data.get(row.sheet_id)!;
       const reservation = {
         id: row.id,
         event,
-        sheet_rank: row.sheet_rank,
-        sheet_num: row.sheet_num,
-        price: event.sheets[row.sheet_rank].price,
+        sheet_rank: sheetData.rank,
+        sheet_num: sheetData.num,
+        price: event.sheets[sheetData.rank].price,
         reserved_at: parseTimestampToEpoch(row.reserved_at),
         canceled_at: row.canceled_at ? parseTimestampToEpoch(row.canceled_at) : null,
       };
