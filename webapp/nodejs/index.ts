@@ -204,7 +204,7 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
     reservation: any;
   }> {
     let rIdx = 0;
-    for (const sheetRow of sheetRows) {
+    sheetIter: for (const sheetRow of sheetRows) {
       for (; rIdx < reservations.length; rIdx++) {
         const r = reservations[rIdx];
         if (r.sheet_id < sheetRow.id) {
@@ -216,7 +216,7 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
           sheet: sheetRow,
           reservation: matchedReservation,
         };
-        break;
+        continue sheetIter;
       }
       // no more reservation.
       yield {
