@@ -190,7 +190,14 @@ async function getEvent(eventId: number, loginUserId?: number): Promise<Event | 
     event.total++;
     event.sheets[sheet.rank].total++;
 
-    const [[reservation]] = await fastify.mysql.query("SELECT * FROM reservations WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)", [event.id, sheet.id]);
+    const [[reservation]] = await fastify.mysql.query(
+      `
+      SELECT * FROM reservations
+      WHERE event_id = ? AND sheet_id = ? AND canceled_at IS NULL
+      GROUP BY event_id, sheet_id HAVING reserved_at = MIN(reserved_at)
+      `,
+      [event.id, sheet.id],
+    );
     if (reservation) {
       if (loginUserId && reservation.user_id === loginUserId) {
         sheet.mine = true;
@@ -216,6 +223,17 @@ async function getEvent(eventId: number, loginUserId?: number): Promise<Event | 
   delete event.closed_fg;
 
   return event;
+}
+
+/**
+ * getEvent which uses per-request cache.
+ */
+async function getEventCached(eventId: number, cache: Map<number, Event>): Promise<Event | null> {
+  const e = cache.get(eventId);
+  if (e != null) {
+    return e;
+  }
+  return getEvent(eventId);
 }
 
 function sanitizeEvent(event: Event) {
@@ -301,6 +319,8 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
     return resError(reply, "forbidden", 403);
   }
 
+  // per-request cache of Events.
+  const eventCache = new Map();
   const recentReservations: Array<any> = [];
   {
     const [rows] = await fastify.mysql.query(
@@ -318,7 +338,7 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
     );
 
     for (const row of rows) {
-      const event = await getEvent(row.event_id);
+      const event = await getEventCached(row.event_id, eventCache);
 
       const reservation = {
         id: row.id,
@@ -367,7 +387,7 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
       [user.id],
     );
     for (const row of rows) {
-      const event = await getEvent(row.event_id);
+      const event = await getEventCached(row.event_id, eventCache);
       for (const sheetRank of Object.keys(event.sheets)) {
         delete event.sheets[sheetRank].detail;
       }
