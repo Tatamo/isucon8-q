@@ -303,7 +303,19 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
 
   const recentReservations: Array<any> = [];
   {
-    const [rows] = await fastify.mysql.query("SELECT r.*, s.rank AS sheet_rank, s.num AS sheet_num FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id WHERE r.user_id = ? ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC LIMIT 5", [[user.id]]);
+    const [rows] = await fastify.mysql.query(
+      `
+    SELECT r.*,
+           s.rank AS sheet_rank,
+           s.num AS sheet_num
+    FROM reservations r
+         INNER JOIN sheets s ON s.id = r.sheet_id
+    WHERE r.user_id = ?
+    ORDER BY IFNULL(r.canceled_at, r.reserved_at) DESC
+    LIMIT 5
+    `,
+      [[user.id]],
+    );
 
     for (const row of rows) {
       const event = await getEvent(row.event_id);
@@ -328,13 +340,32 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
 
   user.recent_reservations = recentReservations;
 
-  const [[totalPriceRow]] = await fastify.mysql.query("SELECT IFNULL(SUM(e.price + s.price), 0) FROM reservations r INNER JOIN sheets s ON s.id = r.sheet_id INNER JOIN events e ON e.id = r.event_id WHERE r.user_id = ? AND r.canceled_at IS NULL", user.id);
+  const [[totalPriceRow]] = await fastify.mysql.query(
+    `
+    SELECT IFNULL(SUM(e.price + s.price), 0)
+    FROM reservations r
+         INNER JOIN sheets s ON s.id = r.sheet_id
+         INNER JOIN events e ON e.id = r.event_id
+    WHERE r.user_id = ? AND r.canceled_at IS NULL
+    `,
+    user.id,
+  );
   const [totalPriceStr] = Object.values(totalPriceRow);
   user.total_price = Number.parseInt(totalPriceStr, 10);
 
   const recentEvents: Array<any> = [];
   {
-    const [rows] = await fastify.mysql.query("SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5", [user.id]);
+    const [rows] = await fastify.mysql.query(
+      `
+      SELECT event_id
+      FROM reservations
+      WHERE user_id = ?
+      GROUP BY event_id
+      ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC
+      LIMIT 5
+      `,
+      [user.id],
+    );
     for (const row of rows) {
       const event = await getEvent(row.event_id);
       for (const sheetRank of Object.keys(event.sheets)) {
