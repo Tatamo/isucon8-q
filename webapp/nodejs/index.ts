@@ -428,17 +428,7 @@ fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }
   let sheetRow: any;
   let reservationId: any;
   while (true) {
-    [[sheetRow]] = await fastify.mysql.query(
-      `
-    SELECT * FROM sheets
-    WHERE id NOT IN (
-      SELECT sheet_id FROM reservations
-      WHERE event_id = ? AND canceled_at IS NULL FOR UPDATE) AND \`rank\` = ?
-      ORDER BY RAND()
-      LIMIT 1
-      `,
-      [event.id, rank],
-    );
+    [[sheetRow]] = await fastify.mysql.query("SELECT * FROM sheets WHERE id NOT IN (SELECT sheet_id FROM reservations WHERE event_id = ? AND canceled_at IS NULL FOR UPDATE) AND `rank` = ? ORDER BY RAND() LIMIT 1", [event.id, rank]);
 
     if (!sheetRow) {
       return resError(reply, "sold_out", 409);
@@ -481,8 +471,8 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
     return resError(reply, "invalid_rank", 404);
   }
 
-  const sheetsData = await sheets();
-  if (!sheetsData.validateRankAndNum(rank, num)) {
+  const [[sheetRow]] = await fastify.mysql.query("SELECT * FROM sheets WHERE `rank` = ? AND num = ?", [rank, num]);
+  if (!sheetRow) {
     return resError(reply, "invalid_sheet", 404);
   }
 
@@ -531,26 +521,21 @@ interface Sheet {
 class SheetsData {
   public data: Map<number, Sheet>;
   public byRowRank: Sheet[];
-  private rankAndNumSet: Set<string> = new Set();
   private rankCountMap: Map<string, number> = new Map();
   constructor(sheetRows: any[]) {
     const data = new Map();
     const byRowRank: Sheet[] = [];
-    const { rankCountMap, rankAndNumSet } = this;
+    const rankCountMap = this.rankCountMap;
     for (const sheetRow of sheetRows) {
       data.set(sheetRow.id, sheetRow);
       byRowRank.push(sheetRow);
       rankCountMap.set(sheetRow.rank, (rankCountMap.get(sheetRow.rank) || 0) + 1);
-      rankAndNumSet.add(`${sheetRow.rank}#${sheetRow.num}`);
     }
     this.data = data;
     this.byRowRank = byRowRank;
   }
   public countByRank(rank: string): number {
     return this.rankCountMap.get(rank) || 0;
-  }
-  public validateRankAndNum(rank: string, num: number): boolean {
-    return this.rankAndNumSet.has(`${rank}#${num}`);
   }
 }
 /**
