@@ -239,7 +239,22 @@ async function getEvent(eventIds: number[], loginUserId?: number, loadedEvents?:
 
     resultEvents.push(event);
   }
-  return resultEvents;
+  return sortToMatch(eventIds, resultEvents);
+
+  // event idとその中身を揃える
+  function sortToMatch(ids: number[], events: Event[]): Event[] {
+    // it may be small.
+    const result: Event[] = [];
+    for (const id of ids) {
+      for (const ev of events) {
+        if (id === ev.id) {
+          result.push(ev);
+          break;
+        }
+      }
+    }
+    return result;
+  }
 
   // reservationsをevent idごとに分ける
   function groupByEventId(reservations: any[]): Map<number, any[]> {
