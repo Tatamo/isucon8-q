@@ -12,6 +12,9 @@ const fastify_static_1 = __importDefault(require("fastify-static"));
 const point_of_view_1 = __importDefault(require("point-of-view"));
 const ejs_1 = __importDefault(require("ejs"));
 const path_1 = __importDefault(require("path"));
+const child_process_1 = __importDefault(require("child_process"));
+const util_1 = __importDefault(require("util"));
+const execFile = util_1.default.promisify(child_process_1.default.execFile);
 const SECRET = "tagomoris";
 const fastify = fastify_1.default({
     logger: true,
@@ -59,6 +62,8 @@ function loginRequired(request, reply, done) {
         if (!user) {
             resError(reply, "login_required", 401);
         }
+        // cache loaded user to the request.
+        request.loginUser = user;
         done();
     });
 }
@@ -151,7 +156,7 @@ async function validateRank(rank) {
     return count > 0;
 }
 function parseTimestampToEpoch(timestamp) {
-    return Math.floor(new Date(timestamp).getTime() / 1000);
+    return Math.floor(new Date(timestamp + "Z").getTime() / 1000);
 }
 fastify.get("/", { beforeHandler: fillinUser }, async (request, reply) => {
     const events = (await getEvents()).map((event) => sanitizeEvent(event));
@@ -162,24 +167,7 @@ fastify.get("/", { beforeHandler: fillinUser }, async (request, reply) => {
     });
 });
 fastify.get("/initialize", async (_request, reply) => {
-    const conn = await getConnection();
-    await conn.beginTransaction();
-    try {
-        await conn.query("DELETE FROM users WHERE id > 1000");
-        await conn.query("DELETE FROM reservations WHERE id > 1000");
-        await conn.query("UPDATE reservations SET canceled_at = NULL");
-        await conn.query("DELETE FROM events WHERE id > 3");
-        await conn.query("UPDATE events SET public_fg = 0, closed_fg = 1");
-        await conn.query("UPDATE events SET public_fg = 1, closed_fg = 0 WHERE id = 1");
-        await conn.query("UPDATE events SET public_fg = 1, closed_fg = 0 WHERE id = 2");
-        await conn.query("UPDATE events SET public_fg = 0, closed_fg = 0 WHERE id = 3");
-        await conn.commit();
-    }
-    catch (e) {
-        console.error(new trace_error_1.default("Unexpected error", e));
-        await conn.rollback();
-    }
-    conn.release();
+    await execFile("../../db/init.sh");
     reply.code(204);
 });
 fastify.post("/api/users", async (request, reply) => {
@@ -219,8 +207,8 @@ fastify.post("/api/users", async (request, reply) => {
     });
 });
 fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, reply) => {
-    const [[user]] = await fastify.mysql.query("SELECT id, nickname FROM users WHERE id = ?", [request.params.id]);
-    if (user.id !== (await getLoginUser(request)).id) {
+    const user = request.loginUser;
+    if (request.params.id !== user.id) {
         return resError(reply, "forbidden", 403);
     }
     const recentReservations = [];
@@ -249,13 +237,13 @@ fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, 
     user.total_price = Number.parseInt(totalPriceStr, 10);
     const recentEvents = [];
     {
-        const [rows] = await fastify.mysql.query("SELECT DISTINCT event_id FROM reservations WHERE user_id = ? ORDER BY IFNULL(canceled_at, reserved_at) DESC LIMIT 5", [user.id]);
+        const [rows] = await fastify.mysql.query("SELECT event_id FROM reservations WHERE user_id = ? GROUP BY event_id ORDER BY MAX(IFNULL(canceled_at, reserved_at)) DESC LIMIT 5", [user.id]);
         for (const row of rows) {
             const event = await getEvent(row.event_id);
             for (const sheetRank of Object.keys(event.sheets)) {
                 delete event.sheets[sheetRank].detail;
-                recentEvents.push(event);
             }
+            recentEvents.push(event);
         }
     }
     user.recent_events = recentEvents;
@@ -306,7 +294,7 @@ fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }
     if (!(event && event.public)) {
         return resError(reply, "invalid_event", 404);
     }
-    if (!await validateRank(rank)) {
+    if (!(await validateRank(rank))) {
         return resError(reply, "invalid_rank", 400);
     }
     let sheetRow;
@@ -348,7 +336,7 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
     if (!(event && event.public)) {
         return resError(reply, "invalid_event", 404);
     }
-    if (!await validateRank(rank)) {
+    if (!(await validateRank(rank))) {
         return resError(reply, "invalid_rank", 404);
     }
     const [[sheetRow]] = await fastify.mysql.query("SELECT * FROM sheets WHERE `rank` = ? AND num = ?", [rank, num]);
@@ -568,9 +556,9 @@ function resError(reply, error = "unknown", status = 500) {
         .send({ error });
 }
 fastify.listen(8080, (err, address) => {
-    fastify.log.info(`server listening on ${address}: ${err}`);
     if (err) {
         throw new trace_error_1.default("Failed to listening", err);
     }
+    fastify.log.info(`server listening on ${address}`);
 });
 //# sourceMappingURL=index.js.map

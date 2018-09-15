@@ -40,6 +40,7 @@ declare module "fastify" {
     user: any;
     administrator: any;
     cookies: any;
+    loginUser: LoginUser | null;
   }
 
   interface FastifyReply<HttpResponse> {
@@ -110,6 +111,8 @@ function loginRequired(request, reply, done) {
     if (!user) {
       resError(reply, "login_required", 401);
     }
+    // cache loaded user to the request.
+    request.loginUser = user;
     done();
   });
 }
@@ -230,7 +233,7 @@ async function validateRank(rank: string): Promise<boolean> {
 }
 
 function parseTimestampToEpoch(timestamp: string) {
-  return Math.floor(new Date(timestamp+"Z").getTime() / 1000);
+  return Math.floor(new Date(timestamp + "Z").getTime() / 1000);
 }
 
 fastify.get("/", { beforeHandler: fillinUser }, async (request, reply) => {
@@ -293,8 +296,8 @@ fastify.post("/api/users", async (request, reply) => {
 });
 
 fastify.get("/api/users/:id", { beforeHandler: loginRequired }, async (request, reply) => {
-  const [[user]] = await fastify.mysql.query("SELECT id, nickname FROM users WHERE id = ?", [request.params.id]);
-  if (user.id !== (await getLoginUser(request))!.id) {
+  const user = request.loginUser as any;
+  if (request.params.id !== user.id) {
     return resError(reply, "forbidden", 403);
   }
 
@@ -393,13 +396,13 @@ fastify.post("/api/events/:id/actions/reserve", { beforeHandler: loginRequired }
   const eventId = request.params.id;
   const rank = request.body.sheet_rank;
 
-  const user = (await getLoginUser(request))!;
+  const user = request.loginUser!;
   const event = await getEvent(eventId, user.id);
   if (!(event && event.public)) {
     return resError(reply, "invalid_event", 404);
   }
 
-  if (!await validateRank(rank)) {
+  if (!(await validateRank(rank))) {
     return resError(reply, "invalid_rank", 400);
   }
 
@@ -440,12 +443,12 @@ fastify.delete("/api/events/:id/sheets/:rank/:num/reservation", { beforeHandler:
   const rank = request.params.rank;
   const num = request.params.num;
 
-  const user = (await getLoginUser(request))!;
+  const user = request.loginUser!;
   const event = await getEvent(eventId, user.id);
   if (!(event && event.public)) {
     return resError(reply, "invalid_event", 404);
   }
-  if (!await validateRank(rank)) {
+  if (!(await validateRank(rank))) {
     return resError(reply, "invalid_rank", 404);
   }
 
