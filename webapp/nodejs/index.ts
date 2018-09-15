@@ -236,8 +236,9 @@ async function getEventCached(eventId: number, cache: Map<number, Event>): Promi
   const result = await getEvent(eventId);
   if (result != null) {
     cache.set(eventId, result);
+    return { ...result };
   }
-  return result;
+  return null;
 }
 
 function sanitizeEvent(event: Event) {
