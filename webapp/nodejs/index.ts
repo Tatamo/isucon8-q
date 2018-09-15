@@ -221,7 +221,7 @@ async function getEvent(eventId: number, loginUserId?: number, loadedEvent?: Eve
     }
   }
 
-  for (const { sheet: sheetRow, reservation } of zipBySheetId(sheetsData.byRowRank, reservations)) {
+  for (const { sheet: sheetRow, reservation } of zipBySheetId(sheetsData.byId, reservations)) {
     const sheet: any = { ...sheetRow };
     if (!event.sheets[sheet.rank].price) {
       event.sheets[sheet.rank].price = event.price + sheet.price;
@@ -555,6 +555,7 @@ interface Sheet {
 class SheetsData {
   public data: Map<number, Sheet>;
   public byRowRank: Sheet[];
+  public byId: Sheet[];
   private rankCountMap: Map<string, number> = new Map();
   constructor(sheetRows: any[]) {
     const data = new Map();
@@ -567,6 +568,7 @@ class SheetsData {
     }
     this.data = data;
     this.byRowRank = byRowRank;
+    this.byId = [...byRowRank].sort((a, b) => a.id - b.id);
   }
   public countByRank(rank: string): number {
     return this.rankCountMap.get(rank) || 0;
