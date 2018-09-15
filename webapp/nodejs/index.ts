@@ -231,7 +231,7 @@ async function getEvent(eventId: number, loginUserId?: number): Promise<Event | 
 async function getEventCached(eventId: number, cache: Map<number, Event>): Promise<Event | null> {
   const e = cache.get(eventId);
   if (e != null) {
-    return e;
+    return { ...e };
   }
   const result = await getEvent(eventId);
   if (result != null) {
