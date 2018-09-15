@@ -144,16 +144,15 @@ async function getEvents(where: (event: Event) => boolean = (eventRow) => !!even
     const [rows] = await conn.query("SELECT * FROM events ORDER BY id ASC");
 
     const filteredRows = rows.filter((row) => where(row));
+    const filteredIds = filteredRows.map((row) => row.id);
 
-    for (const eventDoc of filteredRows) {
-      const eventArr = await getEvent(eventDoc.id, undefined, eventDoc);
+    const eventArr = await getEvent(filteredIds, undefined, filteredRows);
 
-      for (const event of eventArr) {
-        for (const rank of Object.keys(event.sheets)) {
-          delete event.sheets[rank].detail;
-        }
-        events.push(event);
+    for (const event of eventArr) {
+      for (const rank of Object.keys(event.sheets)) {
+        delete event.sheets[rank].detail;
       }
+      events.push(event);
     }
 
     await conn.commit();
